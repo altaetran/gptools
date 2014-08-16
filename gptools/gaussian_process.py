@@ -30,6 +30,7 @@ import scipy.optimize
 import scipy.stats
 import numpy.random
 import numpy.linalg
+import numpy as np
 import sys
 import warnings
 import multiprocessing
@@ -166,8 +167,166 @@ class GaussianProcess(object):
                                   "GaussianProcess!")
         else:
             self.K_up_to_date = False
-    
-    def add_data(self, X, y, err_y=0, n=0, T=None):   
+      
+    def add_data_list(self, X, y, err_y=0, n=0):
+        """Add list of data to the training data set of the GaussianProcess instance.
+        
+        Parameters
+        ----------
+        X : array, (`M`, `N`)
+            `M` input values of dimension `N`.
+        y : list, (`M`,)
+            `M` target values. Each element must have the correct dimension with
+            respect to the derivative order, n. That is, if  n = 0, each element of
+            y is a scalar, if n = 1, each element of y is a vector, and if n = 2, 
+            each element of y is a matrix.
+        err_y : list, (`M`,y[0].shape), scalar list, (`M`,) or scalar float, optional
+            Non-negative values only. Error given as standard deviation) in the
+            `M` target values. If `err_y` is a scalar, the data set is taken to
+            be homoscedastic (constant error). If `err_y` is a list of scalars,
+            each element err_y[i] provides the constant error for all of y[i].
+            Otherwise, err_y[i] posses the same shape as y[i] and provides the 
+            element-wise error for y[i]
+        n : scalar float, optional
+            Non-negative integer values only. Degree of derivative for each
+            target. `n` is taken to be the value for all points in `y`.  
+
+        Raises
+        ------
+        ValueError
+            Bad shapes for any of the inputs, negative values for `err_y` or `n`. 
+        """        
+        # Round and cast n (scalar) as int and get num_dim
+        n = int(round(n))
+        num_dim = self.k.num_dim
+
+        # Verify that n is implemented
+        if not any([n == k for k in [0, 1, 2]]):
+            raise ValueError("Only lists of function observations, gradient "
+                             "observations, or hessian observations can"
+                             "be accepted, corresponding to n = 0, 1, 2"
+                             "respectively")
+
+        # Verify types
+        if not isinstance(y, list):
+            raise ValueError("y must be a list observations (not a matrix or scalar)")
+        if not isinstance(err_y, (list,int,float)):
+            raise ValueError("err_y must be a list errors or a scalar")
+
+        # Put err_y into an array if err_y is a scalar
+        try:
+            iter(err_y)
+        except:
+            err_y = [err_y] * len(y)
+
+        # Verify shapes
+        if not len(y) == len(err_y):
+            raise ValueError("y and err_y must have the same number of observations")
+        if not len(y) == X.shape[0]:
+            raise ValueError("X and y must have the same number of observations")
+
+        # Determine the required observation shapes
+        if n == 0:
+            y_shape = ()
+        elif n == 1:
+            y_shape = (num_dim,)
+        else:
+            y_shape = (num_dim, num_dim,)
+
+        # Verify shapes are consistent
+        for k in range(len(y)):
+            if np.array(y[k]).shape != y_shape:
+                raise ValueError("Each element of y should have a shape consistent "
+                                 "with the input derivative dimension of %.1f ."
+                                 "The %.1f th element of y has shape %s instead of"
+                                 "%s" % (n, k, np.array(y[k]).shape, y_shape))
+            print([np.array(err_y[k]).shape, y_shape])
+            if (np.array(err_y[k]).shape != y_shape) and (np.array(err_y[k]).shape != ()):
+                raise ValueError("Each element of err_y should have a shape consistent "
+                                 "with the input derivative order of %.0f ."
+                                 "The %.0f th element of err_y has shape %s instead of "
+                                 "%s or ()" % (n, k, np.array(err_y[k]).shape, y_shape))  
+ 
+        # Convert array input into 2d.
+        X = scipy.atleast_2d(scipy.asarray(X, dtype=float))
+
+        # Correct single-dimension inputs:
+        if self.num_dim == 1 and X.shape[0] == 1:
+            X = X.T
+        if X.shape != (len(y), self.num_dim):
+            raise ValueError("Shape of training inputs must be (len(y), "
+                             "k.num_dim)! X given has shape %s, shape of y is "
+                             "%s and num_dim=%d."
+                             % (X.shape, y.shape, self.num_dim))
+
+        # Get num free parameters for derivative object and create input n array
+        if n == 2:
+            # Hessian Observation
+            num_free = int(num_dim*num_dim - num_dim*(num_dim-1)/2)
+
+            #  n input corresponding to upper diagonal of hessian
+            n_in = []
+            A = np.eye(num_dim)
+            for i in range(num_dim):
+                for j in range(i, num_dim):
+                    n_in.append((A[i,:]+A[j,:]).tolist())
+            # Convert n_in to acceptable format
+            n_in = scipy.atleast_2d(scipy.asarray(n_in, dtype=int))
+        elif n == 1:
+            # Gradient Observation
+            num_free = num_dim
+
+            n_in = np.eye(num_dim)
+            # Convert n_in to acceptable format
+            n_in = scipy.atleast_2d(scipy.asarray(n_in, dtype=int))
+        else:
+            # Function Observation
+            num_free = 1
+
+            n_in = np.zeros((1,self.num_dim))
+            # Convert n_in to acceptable format
+            n_in = scipy.atleast_2d(scipy.asarray(n_in, dtype=int))
+
+        # Add each point separately
+        for k in range(len(y)):
+            # Get data corresponding to current point
+            X_k = X[k,:]
+            y_k = y[k]
+            err_y_k = err_y[k]
+
+            # Convert y_k to an appropriate array
+            try:
+                iter(y_k)
+            except TypeError:
+                y_k = scipy.asarray([y_k], dtype=float)
+            else:
+                y_k = scipy.asarray(y_k, dtype=float)
+
+            # Convert err_y_k to an appropriate array
+            try:
+                iter(err_y_k)
+            except TypeError:
+                err_y_k = err_y_k * scipy.ones_like(y_k, dtype=float)
+            else:
+                err_y_k = scipy.asarray(err_y_k, dtype=float)
+
+            # Stack the X_k's for each derivative observation at X_k
+            X_in = scipy.array([X_k for _ in range(num_free)])
+            # Create the y input and err_y input for _add_data
+            if n == 0:
+                y_in = y_k
+                err_y_in = err_y_k
+            if n == 1:
+                y_in = y_k
+                err_y_in = err_y_k
+            elif n == 2:
+                # Get upper triangular part of hessian and hessian error
+                y_in = y_k[np.triu_indices(num_dim)]
+                err_y_in = err_y_k[np.triu_indices(num_dim)]
+            self._add_data(X_in, y_in, err_y=err_y_in, n=n_in)
+
+      
+    def add_data(self, X, y, err_y=0, n=0, T=None):
         """Add data to the training data set of the GaussianProcess instance.
         
         Parameters
@@ -188,11 +347,11 @@ class GaussianProcess(object):
             points in `y`. Otherwise, the length of n must equal the length of
             `y`. Default value is 0 (observation of target value). If
             non-integer values are passed, they will be silently rounded.
-        
+
         Raises
         ------
         ValueError
-            Bad shapes for any of the inputs, negative values for `err_y` or `n`.
+            Bad shapes for any of the inputs, negative values for `err_y` or `n`. 
         """
         # Verify y has only one non-trivial dimension:
         try:
@@ -205,7 +364,7 @@ class GaussianProcess(object):
                 raise ValueError("Training targets y must have only one "
                                  "dimension with length greater than one! Shape "
                                  "of y given is %s" % (y.shape,))
-        
+
         # Handle scalar error or verify shape of array error matches shape of y:
         try:
             iter(err_y)
@@ -219,7 +378,7 @@ class GaussianProcess(object):
                                  "of y given is %s." % (err_y.shape, y.shape))
         if (err_y < 0).any():
             raise ValueError("All elements of err_y must be non-negative!")
-        
+
         # Handle scalar training input or convert array input into 2d.
         try:
             iter(X)
@@ -234,7 +393,7 @@ class GaussianProcess(object):
                              "k.num_dim)! X given has shape %s, shape of y is "
                              "%s and num_dim=%d."
                              % (X.shape, y.shape, self.num_dim))
-        
+
         # Handle scalar derivative orders or verify shape of array derivative
         # orders matches shape of y:
         try:
@@ -253,6 +412,37 @@ class GaussianProcess(object):
                                  % (n.shape, y.shape, self.num_dim))
         if (n < 0).any():
             raise ValueError("All elements of n must be non-negative integers!")
+        
+        print("INPUT2 ")
+        print(X)
+        print(y)
+        print(err_y)
+        print(n)
+        
+        self._add_data(X, y, err_y=err_y, n=n, T=T)
+
+    def _add_data(self, X, y, err_y=0, n=0, T=None):   
+        """Add data to the training data set of the GaussianProcess instance.
+        
+        Parameters
+        ----------
+        X : array, (`M`, `N`)
+            `M` input values of dimension `N`.
+        y : array, (`M`,)
+            `M` target values.
+        err_y : array, (`M`,) or scalar float, optional
+            Non-negative values only. Error given as standard deviation) in the
+            `M` target values. If `err_y` is a scalar, the data set is taken to
+            be homoscedastic (constant error). Otherwise, the length of `err_y`
+            must equal the length of `y`. Default value is 0 (noiseless
+            observations).
+        n : array, (`M`, `N`) or scalar float, optional
+            Non-negative integer values only. Degree of derivative for each
+            target. If `n` is a scalar it is taken to be the value for all
+            points in `y`. Otherwise, the length of n must equal the length of
+            `y`. Default value is 0 (observation of target value). If
+            non-integer values are passed, they will be silently rounded.
+        """
         
         # Handle transform:
         if T is None and self.T is not None:
@@ -290,6 +480,8 @@ class GaussianProcess(object):
         if self.n is None:
             self.n = n
         else:
+            print(self.n)
+            print(n)
             self.n = scipy.vstack((self.n, n))
         self.K_up_to_date = False
     
