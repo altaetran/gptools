@@ -240,7 +240,6 @@ class GaussianProcess(object):
                                  "with the input derivative dimension of %.1f ."
                                  "The %.1f th element of y has shape %s instead of"
                                  "%s" % (n, k, np.array(y[k]).shape, y_shape))
-            print([np.array(err_y[k]).shape, y_shape])
             if (np.array(err_y[k]).shape != y_shape) and (np.array(err_y[k]).shape != ()):
                 raise ValueError("Each element of err_y should have a shape consistent "
                                  "with the input derivative order of %.0f ."
@@ -474,8 +473,6 @@ class GaussianProcess(object):
         if self.n is None:
             self.n = n
         else:
-            print(self.n)
-            print(n)
             self.n = scipy.vstack((self.n, n))
         self.K_up_to_date = False
     
