@@ -413,12 +413,6 @@ class GaussianProcess(object):
         if (n < 0).any():
             raise ValueError("All elements of n must be non-negative integers!")
         
-        print("INPUT2 ")
-        print(X)
-        print(y)
-        print(err_y)
-        print(n)
-        
         self._add_data(X, y, err_y=err_y, n=n, T=T)
 
     def _add_data(self, X, y, err_y=0, n=0, T=None):   
